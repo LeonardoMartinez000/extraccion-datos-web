@@ -7,15 +7,31 @@ import time
 from io import StringIO, BytesIO
 import zipfile
 
-# Importar los scripts de extracción
+# Importar los scripts de extracción (manejo de errores)
+apollo_script = None
+apollo_org = None
+lusha_script = None
+lusha_org = None
+
 try:
     import apollo_script
+except ImportError:
+    pass
+
+try:
     import apollo_org
+except ImportError:
+    pass
+
+try:
     import lusha_script
+except ImportError:
+    pass
+
+try:
     import lusha_org
-    # import signal_script  # Comentado porque está vacío
-except ImportError as e:
-    st.error(f"Error al importar módulos: {e}")
+except ImportError:
+    pass
 
 # ===== CONFIGURACIÓN DE LA PÁGINA =====
 st.set_page_config(
@@ -48,15 +64,6 @@ st.markdown("""
         height: 3rem;
         font-weight: bold;
     }
-    .console-box {
-        background-color: #1e1e1e;
-        color: #00ff00;
-        padding: 1rem;
-        border-radius: 5px;
-        font-family: 'Courier New', monospace;
-        height: 400px;
-        overflow-y: auto;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -86,14 +93,27 @@ def read_csv_list(uploaded_file):
     if uploaded_file is None:
         return []
     
-    try:
-        stringio = StringIO(uploaded_file.getvalue().decode("utf-8"))
-        reader = csv.reader(stringio)
-        next(reader)  # Saltar encabezado
-        return [row[0].strip() for row in reader if row]
-    except Exception as e:
-        log_message(f"❌ Error al leer CSV: {e}")
-        return []
+    # Intentar diferentes codificaciones comunes
+    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'iso-8859-1', 'windows-1252', 'cp1252']
+    
+    for encoding in encodings:
+        try:
+            stringio = StringIO(uploaded_file.getvalue().decode(encoding))
+            reader = csv.reader(stringio)
+            next(reader)  # Saltar encabezado
+            result = [row[0].strip() for row in reader if row and row[0].strip()]
+            
+            if result:  # Si se leyó algo exitosamente
+                log_message(f"✅ Archivo CSV leído correctamente (codificación: {encoding})")
+                return result
+        except (UnicodeDecodeError, UnicodeError):
+            continue  # Intentar con la siguiente codificación
+        except Exception as e:
+            log_message(f"⚠️ Error al leer CSV con {encoding}: {e}")
+            continue
+    
+    log_message(f"❌ No se pudo leer el archivo CSV con ninguna codificación estándar")
+    return []
 
 def create_download_zip(files_dict):
     """Crear un ZIP con múltiples archivos"""
@@ -104,6 +124,52 @@ def create_download_zip(files_dict):
     zip_buffer.seek(0)
     return zip_buffer
 
+def run_extraction(process_type, api_key, params):
+    """Ejecutar proceso de extracción"""
+    try:
+        output_folder = "temp_output"
+        os.makedirs(output_folder, exist_ok=True)
+        
+        if process_type == "apollo_contact":
+            if apollo_script is None:
+                log_message("❌ ERROR: apollo_script.py no está disponible")
+                return None
+            
+            empresas, cargos, paises = params
+            apollo_script.run(api_key, empresas, cargos, paises, output_folder, log_message, st.session_state.stop_event)
+            return os.path.join(output_folder, "resultados_apollo.csv")
+        
+        elif process_type == "apollo_org":
+            if apollo_org is None:
+                log_message("❌ ERROR: apollo_org.py no está disponible")
+                return None
+            
+            temp_csv = params
+            apollo_org.run(api_key, temp_csv, output_folder, log_message, st.session_state.stop_event)
+            return os.path.join(output_folder, "apollo_organizations_output.csv")
+        
+        elif process_type == "lusha_contact":
+            if lusha_script is None:
+                log_message("❌ ERROR: lusha_script.py no está disponible")
+                return None
+            
+            empresas, cargos, paises = params
+            lusha_script.run(api_key, empresas, cargos, paises, output_folder, log_message, st.session_state.stop_event)
+            return os.path.join(output_folder, "resultados_lusha.csv")
+        
+        elif process_type == "lusha_org":
+            if lusha_org is None:
+                log_message("❌ ERROR: lusha_org.py no está disponible")
+                return None
+            
+            temp_csv = params
+            lusha_org.run(api_key, temp_csv, output_folder, log_message, st.session_state.stop_event)
+            return os.path.join(output_folder, "lusha_organizations_output.csv")
+        
+    except Exception as e:
+        log_message(f"❌ Error: {e}")
+        return None
+
 # ===== INTERFAZ PRINCIPAL =====
 
 st.markdown('<div class="main-header">🔍 Herramienta de Extracción de Datos v4.0 Web</div>', unsafe_allow_html=True)
@@ -112,7 +178,6 @@ st.markdown('<div class="main-header">🔍 Herramienta de Extracción de Datos v
 st.sidebar.markdown("### 🔑 API Keys")
 apollo_api = st.sidebar.text_input("Apollo API Key", type="password", key="apollo_api")
 lusha_api = st.sidebar.text_input("Lusha API Key", type="password", key="lusha_api")
-signal_api = st.sidebar.text_input("SignalHire API Key", type="password", key="signal_api")
 
 st.sidebar.markdown("---")
 
@@ -149,85 +214,97 @@ with tab1:
     
     with col1:
         cargos_file = st.file_uploader("CSV de Cargos", type=['csv'], key="cargos")
+        if cargos_file:
+            preview_cargos = read_csv_list(cargos_file)
+            if preview_cargos:
+                with st.expander(f"👀 Ver cargos ({len(preview_cargos)} encontrados)"):
+                    st.write(preview_cargos[:10])
+                    if len(preview_cargos) > 10:
+                        st.caption(f"... y {len(preview_cargos) - 10} más")
     
     with col2:
         empresas_file = st.file_uploader("CSV de Empresas", type=['csv'], key="empresas")
+        if empresas_file:
+            preview_empresas = read_csv_list(empresas_file)
+            if preview_empresas:
+                with st.expander(f"👀 Ver empresas ({len(preview_empresas)} encontradas)"):
+                    st.write(preview_empresas[:10])
+                    if len(preview_empresas) > 10:
+                        st.caption(f"... y {len(preview_empresas) - 10} más")
     
     with col3:
         id_org_file = st.file_uploader("CSV de IDs Organizaciones", type=['csv'], key="id_org")
+        if id_org_file:
+            preview_ids = read_csv_list(id_org_file)
+            if preview_ids:
+                with st.expander(f"👀 Ver IDs ({len(preview_ids)} encontrados)"):
+                    st.write(preview_ids[:10])
+                    if len(preview_ids) > 10:
+                        st.caption(f"... y {len(preview_ids) - 10} más")
     
     # ===== SECCIÓN DE ACCIONES =====
     st.markdown('<div class="section-header">🚀 Ejecutar Extracción</div>', unsafe_allow_html=True)
     
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         if st.button("🟡 Apollo Contactos", disabled=st.session_state.process_running):
             if apollo_api and cargos_file and empresas_file and selected_countries:
-                st.session_state.process_running = True
-                clear_log()
-                log_message("🚀 Iniciando Apollo Contactos...")
-                
-                # Procesar en segundo plano
-                empresas = read_csv_list(empresas_file)
-                cargos = read_csv_list(cargos_file)
-                
-                # Crear directorio temporal
-                output_folder = "temp_output"
-                os.makedirs(output_folder, exist_ok=True)
-                
-                # Ejecutar script
-                try:
-                    apollo_script.run(
-                        apollo_api, empresas, cargos, selected_countries, 
-                        output_folder, log_message, st.session_state.stop_event
-                    )
+                with st.spinner('Procesando...'):
+                    clear_log()
+                    log_message("🚀 Iniciando Apollo Contactos...")
                     
-                    # Leer archivo resultante
-                    output_file = os.path.join(output_folder, "resultados_apollo.csv")
-                    if os.path.exists(output_file):
+                    empresas = read_csv_list(empresas_file)
+                    cargos = read_csv_list(cargos_file)
+                    
+                    # Validación adicional
+                    if not empresas:
+                        log_message("❌ ERROR: El archivo de empresas está vacío o no se pudo leer")
+                        log_message("💡 Verifica que:")
+                        log_message("   - El archivo tenga al menos una empresa después del encabezado")
+                        log_message("   - El formato sea: empresa (en la primera fila) seguido de los nombres")
+                        st.error("El archivo de empresas está vacío o tiene un formato incorrecto")
+                        st.stop()
+                    
+                    if not cargos:
+                        log_message("❌ ERROR: El archivo de cargos está vacío o no se pudo leer")
+                        log_message("💡 Verifica que:")
+                        log_message("   - El archivo tenga al menos un cargo después del encabezado")
+                        log_message("   - El formato sea: cargo (en la primera fila) seguido de los títulos")
+                        st.error("El archivo de cargos está vacío o tiene un formato incorrecto")
+                        st.stop()
+                    
+                    log_message(f"📊 Datos cargados: {len(empresas)} empresas, {len(cargos)} cargos, {len(selected_countries)} países")
+                    
+                    output_file = run_extraction("apollo_contact", apollo_api, (empresas, cargos, selected_countries))
+                    
+                    if output_file and os.path.exists(output_file):
                         with open(output_file, 'r', encoding='utf-8') as f:
                             st.session_state.output_files.append(("resultados_apollo.csv", f.read()))
                         log_message("✅ Proceso completado. Archivo disponible para descarga.")
-                    
-                except Exception as e:
-                    log_message(f"❌ Error: {e}")
-                finally:
-                    st.session_state.process_running = False
+                        st.rerun()
             else:
                 st.error("⚠️ Faltan datos: API Key Apollo, archivos CSV y países")
     
     with col2:
         if st.button("🟡 Apollo Organizaciones", disabled=st.session_state.process_running):
             if apollo_api and id_org_file:
-                st.session_state.process_running = True
-                clear_log()
-                log_message("🚀 Iniciando Apollo Organizaciones...")
-                
-                # Guardar archivo temporalmente
-                temp_csv = "temp_ids.csv"
-                with open(temp_csv, 'wb') as f:
-                    f.write(id_org_file.getvalue())
-                
-                output_folder = "temp_output"
-                os.makedirs(output_folder, exist_ok=True)
-                
-                try:
-                    apollo_org.run(
-                        apollo_api, temp_csv, output_folder, 
-                        log_message, st.session_state.stop_event
-                    )
+                with st.spinner('Procesando...'):
+                    clear_log()
+                    log_message("🚀 Iniciando Apollo Organizaciones...")
                     
-                    output_file = os.path.join(output_folder, "apollo_organizations_output.csv")
-                    if os.path.exists(output_file):
+                    temp_csv = "temp_ids.csv"
+                    with open(temp_csv, 'wb') as f:
+                        f.write(id_org_file.getvalue())
+                    
+                    output_file = run_extraction("apollo_org", apollo_api, temp_csv)
+                    
+                    if output_file and os.path.exists(output_file):
                         with open(output_file, 'r', encoding='utf-8') as f:
                             st.session_state.output_files.append(("apollo_organizations_output.csv", f.read()))
                         log_message("✅ Proceso completado. Archivo disponible para descarga.")
-                
-                except Exception as e:
-                    log_message(f"❌ Error: {e}")
-                finally:
-                    st.session_state.process_running = False
+                        st.rerun()
+                    
                     if os.path.exists(temp_csv):
                         os.remove(temp_csv)
             else:
@@ -236,83 +313,68 @@ with tab1:
     with col3:
         if st.button("🟣 Lusha Contactos", disabled=st.session_state.process_running):
             if lusha_api and cargos_file and empresas_file and selected_countries:
-                st.session_state.process_running = True
-                clear_log()
-                log_message("🚀 Iniciando Lusha Contactos...")
-                
-                empresas = read_csv_list(empresas_file)
-                cargos = read_csv_list(cargos_file)
-                
-                output_folder = "temp_output"
-                os.makedirs(output_folder, exist_ok=True)
-                
-                try:
-                    lusha_script.run(
-                        lusha_api, empresas, cargos, selected_countries,
-                        output_folder, log_message, st.session_state.stop_event
-                    )
+                with st.spinner('Procesando...'):
+                    clear_log()
+                    log_message("🚀 Iniciando Lusha Contactos...")
                     
-                    output_file = os.path.join(output_folder, "resultados_lusha.csv")
-                    if os.path.exists(output_file):
+                    empresas = read_csv_list(empresas_file)
+                    cargos = read_csv_list(cargos_file)
+                    
+                    # Validación adicional
+                    if not empresas:
+                        log_message("❌ ERROR: El archivo de empresas está vacío o no se pudo leer")
+                        st.error("El archivo de empresas está vacío o tiene un formato incorrecto")
+                        st.stop()
+                    
+                    if not cargos:
+                        log_message("❌ ERROR: El archivo de cargos está vacío o no se pudo leer")
+                        st.error("El archivo de cargos está vacío o tiene un formato incorrecto")
+                        st.stop()
+                    
+                    log_message(f"📊 Datos cargados: {len(empresas)} empresas, {len(cargos)} cargos, {len(selected_countries)} países")
+                    
+                    output_file = run_extraction("lusha_contact", lusha_api, (empresas, cargos, selected_countries))
+                    
+                    if output_file and os.path.exists(output_file):
                         with open(output_file, 'r', encoding='utf-8') as f:
                             st.session_state.output_files.append(("resultados_lusha.csv", f.read()))
                         log_message("✅ Proceso completado. Archivo disponible para descarga.")
-                
-                except Exception as e:
-                    log_message(f"❌ Error: {e}")
-                finally:
-                    st.session_state.process_running = False
+                        st.rerun()
             else:
                 st.error("⚠️ Faltan datos: API Key Lusha, archivos CSV y países")
     
     with col4:
         if st.button("🟣 Lusha Organizaciones", disabled=st.session_state.process_running):
             if lusha_api and id_org_file:
-                st.session_state.process_running = True
-                clear_log()
-                log_message("🚀 Iniciando Lusha Organizaciones...")
-                
-                temp_csv = "temp_ids.csv"
-                with open(temp_csv, 'wb') as f:
-                    f.write(id_org_file.getvalue())
-                
-                output_folder = "temp_output"
-                os.makedirs(output_folder, exist_ok=True)
-                
-                try:
-                    lusha_org.run(
-                        lusha_api, temp_csv, output_folder,
-                        log_message, st.session_state.stop_event
-                    )
+                with st.spinner('Procesando...'):
+                    clear_log()
+                    log_message("🚀 Iniciando Lusha Organizaciones...")
                     
-                    output_file = os.path.join(output_folder, "lusha_organizations_output.csv")
-                    if os.path.exists(output_file):
+                    temp_csv = "temp_ids.csv"
+                    with open(temp_csv, 'wb') as f:
+                        f.write(id_org_file.getvalue())
+                    
+                    output_file = run_extraction("lusha_org", lusha_api, temp_csv)
+                    
+                    if output_file and os.path.exists(output_file):
                         with open(output_file, 'r', encoding='utf-8') as f:
                             st.session_state.output_files.append(("lusha_organizations_output.csv", f.read()))
                         log_message("✅ Proceso completado. Archivo disponible para descarga.")
-                
-                except Exception as e:
-                    log_message(f"❌ Error: {e}")
-                finally:
-                    st.session_state.process_running = False
+                        st.rerun()
+                    
                     if os.path.exists(temp_csv):
                         os.remove(temp_csv)
             else:
                 st.error("⚠️ Faltan datos: API Key Lusha y archivo de IDs")
     
-    with col5:
-        if st.button("🔴 Cancelar", disabled=not st.session_state.process_running):
-            st.session_state.stop_event.set()
-            log_message("🛑 Cancelación solicitada...")
-            st.session_state.process_running = False
-    
     # ===== CONSOLA DE LOG =====
     st.markdown('<div class="section-header">📋 Consola de Ejecución</div>', unsafe_allow_html=True)
     
-    console_container = st.container()
-    with console_container:
-        console_text = "\n".join(st.session_state.console_log[-50:])  # Últimas 50 líneas
+    if st.session_state.console_log:
+        console_text = "\n".join(st.session_state.console_log[-50:])
         st.code(console_text, language=None)
+    else:
+        st.info("👋 La consola mostrará el progreso de la extracción cuando inicies un proceso.")
     
     # ===== DESCARGA DE RESULTADOS =====
     if st.session_state.output_files:
@@ -321,7 +383,6 @@ with tab1:
         col1, col2 = st.columns(2)
         
         with col1:
-            # Descargar archivos individuales
             for filename, content in st.session_state.output_files:
                 st.download_button(
                     label=f"📥 Descargar {filename}",
@@ -331,7 +392,6 @@ with tab1:
                 )
         
         with col2:
-            # Descargar todos como ZIP
             if len(st.session_state.output_files) > 1:
                 files_dict = {filename: content for filename, content in st.session_state.output_files}
                 zip_buffer = create_download_zip(files_dict)
@@ -345,6 +405,7 @@ with tab1:
         
         if st.button("🗑️ Limpiar Resultados"):
             st.session_state.output_files = []
+            clear_log()
             st.rerun()
 
 with tab2:
@@ -355,7 +416,6 @@ with tab2:
     En la barra lateral izquierda, ingresa tus API Keys para:
     - **Apollo**: Para búsquedas de contactos y organizaciones
     - **Lusha**: Para búsquedas de contactos y organizaciones
-    - **SignalHire**: Para búsquedas de contactos (próximamente)
     
     ### 2️⃣ Seleccionar Países
     Marca los países donde deseas buscar contactos.
@@ -405,7 +465,6 @@ with tab2:
     
     ### ⚠️ Notas Importantes
     - Los procesos pueden tardar varios minutos dependiendo del volumen de datos
-    - Puedes cancelar un proceso en cualquier momento
     - Los archivos se generan y están disponibles para descarga inmediatamente
     - Esta aplicación no almacena tus datos ni API keys permanentemente
     """)
