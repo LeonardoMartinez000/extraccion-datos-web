@@ -45,14 +45,14 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        font-size: 2.5rem;
+        font-size: 2.1rem;
         font-weight: bold;
         color: #1f77b4;
         text-align: center;
-        padding: 1rem 0;
+        padding: o.5rem 0;
     }
     .section-header {
-        font-size: 1.5rem;
+        font-size: 1.2rem;
         font-weight: bold;
         color: #ff7f0e;
         margin-top: 1.5rem;
