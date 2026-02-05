@@ -49,7 +49,7 @@ st.markdown("""
         font-weight: bold;
         color: #1f77b4;
         text-align: center;
-        padding: o.5rem 0;
+        padding: 0.5rem 0;
     }
     .section-header {
         font-size: 1.2rem;
