@@ -73,7 +73,7 @@ def run(api_key, empresas, cargos, paises, output_folder, log_callback, stop_eve
 
             payload = {
                 "q_organization_name": empresa,
-                "person_titles": cargos,  # <-- CAMBIO: Usar el 'chunk' en lugar de la lista completa 'cargos'
+                "person_titles": chunk,  # <-- CAMBIO: Usar el 'chunk' en lugar de la lista completa 'cargos'
                 "organization_locations": paises,
                 "page": 1,
                 "per_page": 50 # 40 es un valor aceptable
@@ -149,4 +149,5 @@ def run(api_key, empresas, cargos, paises, output_folder, log_callback, stop_eve
     except IOError as e:
 
         log_callback(f"❌ ERROR FATAL: No se pudo escribir en el archivo de salida. Causa: {e}")
+
 
