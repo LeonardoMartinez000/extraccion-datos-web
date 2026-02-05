@@ -10,7 +10,8 @@ def run(api_key, empresas, cargos, paises, output_folder, log_callback, stop_eve
     log_callback("🚀 Iniciando búsqueda de contactos en Apollo (Modo Web)...")
     
     # URL validada por el usuario
-    url = "https://api.apollo.io/api/v1/mixed_people/api_search"
+    #url = "https://api.apollo.io/api/v1/mixed_people/api_search"
+    url = "https://api.apollo.io/api/v1/contacts/search"
     headers = {
         'Cache-Control': 'no-cache',
         'Content-Type': 'application/json',
@@ -130,4 +131,5 @@ def run(api_key, empresas, cargos, paises, output_folder, log_callback, stop_eve
             
     except Exception as e:
         log_callback(f"❌ ERROR FATAL al guardar archivo: {e}")
+
 
