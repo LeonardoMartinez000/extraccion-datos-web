@@ -60,7 +60,7 @@ def run(api_key, empresas, cargos, paises, output_folder, log_callback, stop_eve
         payload = {
             "q_organization_name": empresa.strip(),
             "person_titles": chunk_cargos,
-            "location_countries": lista_paises, # Cambio a parámetro estándar
+            "organization_locations": lista_paises, # Cambio a parámetro estándar
             "page": 1,
             "per_page": 50
         }
@@ -134,3 +134,4 @@ def run(api_key, empresas, cargos, paises, output_folder, log_callback, stop_eve
             log_callback(f"❌ Error al escribir CSV: {str(e)}")
     else:
         log_callback("❌ No se obtuvieron datos. Verifique los nombres de las empresas y países.")
+
