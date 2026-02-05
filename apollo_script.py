@@ -69,7 +69,7 @@ def run(api_key, empresas, cargos, paises, output_folder, log_callback, stop_eve
             # Payload idéntico al probado en Postman/Escritorio
             payload = {
                 "q_organization_name": empresa.strip(),
-                #"organization_locations": ubicacion_query,
+                "organization_locations": ubicacion_query,
                 "person_titles": chunk,
                 "page": 1,
                 "per_page": 50 
@@ -80,7 +80,7 @@ def run(api_key, empresas, cargos, paises, output_folder, log_callback, stop_eve
                 
                 if response.status_code == 200:
                     data = response.json()
-                    people = data.get('people', [])
+                    people = data.get('contacts', [])
                     log_callback(f"  -> Lote {i+1}: {len(people)} contactos encontrados.")
                     
                     for person in people:
@@ -131,6 +131,7 @@ def run(api_key, empresas, cargos, paises, output_folder, log_callback, stop_eve
             
     except Exception as e:
         log_callback(f"❌ ERROR FATAL al guardar archivo: {e}")
+
 
 
 
