@@ -45,7 +45,7 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        font-size: 2.1rem;
+        font-size: 1rem;
         font-weight: bold;
         color: #1f77b4;
         text-align: center;
@@ -61,7 +61,7 @@ st.markdown("""
     .stButton>button {
         width: 100%;
         border-radius: 5px;
-        height: 3rem;
+        height: 1rem;
         font-weight: bold;
     }
 </style>
