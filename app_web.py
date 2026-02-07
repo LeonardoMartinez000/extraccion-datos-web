@@ -6,8 +6,9 @@ import threading
 import time
 from io import StringIO, BytesIO
 import zipfile
+import hashlib
 
-# Importar los scripts de extracción (manejo de errores)
+# Importar los scripts de extracción
 apollo_script = None
 apollo_org = None
 lusha_script = None
@@ -45,14 +46,14 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        font-size: 1rem;
+        font-size: 1.5rem;
         font-weight: bold;
         color: #1f77b4;
         text-align: center;
-        padding: 0.5rem 0;
+        padding: 1rem 0;
     }
     .section-header {
-        font-size: 1.2rem;
+        font-size: 1.5rem;
         font-weight: bold;
         color: #ff7f0e;
         margin-top: 1.5rem;
@@ -77,6 +78,12 @@ if 'process_running' not in st.session_state:
 if 'output_files' not in st.session_state:
     st.session_state.output_files = []
 
+# ===== NUEVO: Cache de archivos para detectar cambios =====
+if 'file_hashes' not in st.session_state:
+    st.session_state.file_hashes = {}
+if 'cached_data' not in st.session_state:
+    st.session_state.cached_data = {}
+
 # ===== FUNCIONES AUXILIARES =====
 
 def log_message(message):
@@ -88,12 +95,51 @@ def clear_log():
     """Limpiar el log de consola"""
     st.session_state.console_log = []
 
-def read_csv_list(uploaded_file):
-    """Leer archivo CSV y retornar lista de valores de la primera columna"""
+def get_file_hash(uploaded_file):
+    """Genera un hash único para identificar el archivo"""
+    if uploaded_file is None:
+        return None
+    
+    # Usar nombre + tamaño + primeros bytes como identificador
+    file_content = uploaded_file.getvalue()
+    file_hash = hashlib.md5(
+        f"{uploaded_file.name}_{uploaded_file.size}_{file_content[:100]}".encode()
+    ).hexdigest()
+    return file_hash
+
+def read_csv_list(uploaded_file, cache_key=None):
+    """
+    Leer archivo CSV y retornar lista de valores de la primera columna
+    Con caché para evitar re-lectura innecesaria
+    """
     if uploaded_file is None:
         return []
     
-    # Intentar diferentes codificaciones comunes
+    # Generar hash del archivo
+    file_hash = get_file_hash(uploaded_file)
+    
+    # Si usamos caché y el archivo no ha cambiado, devolver datos cacheados
+    if cache_key and file_hash:
+        cache_full_key = f"{cache_key}_{file_hash}"
+        
+        # Verificar si el hash cambió (archivo diferente)
+        if cache_key in st.session_state.file_hashes:
+            old_hash = st.session_state.file_hashes[cache_key]
+            if old_hash != file_hash:
+                # Archivo cambió, limpiar caché
+                log_message(f"🔄 Detectado cambio en archivo {cache_key}")
+                if cache_full_key in st.session_state.cached_data:
+                    del st.session_state.cached_data[cache_full_key]
+        
+        # Actualizar hash
+        st.session_state.file_hashes[cache_key] = file_hash
+        
+        # Retornar datos cacheados si existen
+        if cache_full_key in st.session_state.cached_data:
+            log_message(f"📦 Usando datos cacheados para {cache_key}")
+            return st.session_state.cached_data[cache_full_key]
+    
+    # Intentar diferentes codificaciones
     encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'iso-8859-1', 'windows-1252', 'cp1252']
     
     for encoding in encodings:
@@ -103,11 +149,17 @@ def read_csv_list(uploaded_file):
             next(reader)  # Saltar encabezado
             result = [row[0].strip() for row in reader if row and row[0].strip()]
             
-            if result:  # Si se leyó algo exitosamente
+            if result:
                 log_message(f"✅ Archivo CSV leído correctamente (codificación: {encoding})")
+                
+                # Guardar en caché
+                if cache_key and file_hash:
+                    cache_full_key = f"{cache_key}_{file_hash}"
+                    st.session_state.cached_data[cache_full_key] = result
+                
                 return result
         except (UnicodeDecodeError, UnicodeError):
-            continue  # Intentar con la siguiente codificación
+            continue
         except Exception as e:
             log_message(f"⚠️ Error al leer CSV con {encoding}: {e}")
             continue
@@ -203,7 +255,6 @@ st.sidebar.markdown(f"**Países seleccionados:** {len(selected_countries)}")
 
 # ===== ÁREA PRINCIPAL =====
 
-# Tabs para organizar funcionalidad
 tab1, tab2 = st.tabs(["📊 Extracción de Contactos", "ℹ️ Instrucciones"])
 
 with tab1:
@@ -215,7 +266,8 @@ with tab1:
     with col1:
         cargos_file = st.file_uploader("CSV de Cargos", type=['csv'], key="cargos")
         if cargos_file:
-            preview_cargos = read_csv_list(cargos_file)
+            # CAMBIO: Leer con caché y detección de cambios
+            preview_cargos = read_csv_list(cargos_file, cache_key="cargos")
             if preview_cargos:
                 with st.expander(f"👀 Ver cargos ({len(preview_cargos)} encontrados)"):
                     st.write(preview_cargos[:10])
@@ -225,7 +277,8 @@ with tab1:
     with col2:
         empresas_file = st.file_uploader("CSV de Empresas", type=['csv'], key="empresas")
         if empresas_file:
-            preview_empresas = read_csv_list(empresas_file)
+            # CAMBIO: Leer con caché y detección de cambios
+            preview_empresas = read_csv_list(empresas_file, cache_key="empresas")
             if preview_empresas:
                 with st.expander(f"👀 Ver empresas ({len(preview_empresas)} encontradas)"):
                     st.write(preview_empresas[:10])
@@ -235,7 +288,8 @@ with tab1:
     with col3:
         id_org_file = st.file_uploader("CSV de IDs Organizaciones", type=['csv'], key="id_org")
         if id_org_file:
-            preview_ids = read_csv_list(id_org_file)
+            # CAMBIO: Leer con caché y detección de cambios
+            preview_ids = read_csv_list(id_org_file, cache_key="ids_org")
             if preview_ids:
                 with st.expander(f"👀 Ver IDs ({len(preview_ids)} encontrados)"):
                     st.write(preview_ids[:10])
@@ -254,23 +308,17 @@ with tab1:
                     clear_log()
                     log_message("🚀 Iniciando Apollo Contactos...")
                     
-                    empresas = read_csv_list(empresas_file)
-                    cargos = read_csv_list(cargos_file)
+                    # CAMBIO: Leer datos frescos (no cacheados de preview)
+                    empresas = read_csv_list(empresas_file, cache_key="empresas")
+                    cargos = read_csv_list(cargos_file, cache_key="cargos")
                     
-                    # Validación adicional
                     if not empresas:
                         log_message("❌ ERROR: El archivo de empresas está vacío o no se pudo leer")
-                        log_message("💡 Verifica que:")
-                        log_message("   - El archivo tenga al menos una empresa después del encabezado")
-                        log_message("   - El formato sea: empresa (en la primera fila) seguido de los nombres")
                         st.error("El archivo de empresas está vacío o tiene un formato incorrecto")
                         st.stop()
                     
                     if not cargos:
                         log_message("❌ ERROR: El archivo de cargos está vacío o no se pudo leer")
-                        log_message("💡 Verifica que:")
-                        log_message("   - El archivo tenga al menos un cargo después del encabezado")
-                        log_message("   - El formato sea: cargo (en la primera fila) seguido de los títulos")
                         st.error("El archivo de cargos está vacío o tiene un formato incorrecto")
                         st.stop()
                     
@@ -317,18 +365,18 @@ with tab1:
                     clear_log()
                     log_message("🚀 Iniciando Lusha Contactos...")
                     
-                    empresas = read_csv_list(empresas_file)
-                    cargos = read_csv_list(cargos_file)
+                    # CAMBIO: Leer datos frescos
+                    empresas = read_csv_list(empresas_file, cache_key="empresas")
+                    cargos = read_csv_list(cargos_file, cache_key="cargos")
                     
-                    # Validación adicional
                     if not empresas:
-                        log_message("❌ ERROR: El archivo de empresas está vacío o no se pudo leer")
-                        st.error("El archivo de empresas está vacío o tiene un formato incorrecto")
+                        log_message("❌ ERROR: El archivo de empresas está vacío")
+                        st.error("El archivo de empresas está vacío")
                         st.stop()
                     
                     if not cargos:
-                        log_message("❌ ERROR: El archivo de cargos está vacío o no se pudo leer")
-                        st.error("El archivo de cargos está vacío o tiene un formato incorrecto")
+                        log_message("❌ ERROR: El archivo de cargos está vacío")
+                        st.error("El archivo de cargos está vacío")
                         st.stop()
                     
                     log_message(f"📊 Datos cargados: {len(empresas)} empresas, {len(cargos)} cargos, {len(selected_countries)} países")
@@ -425,6 +473,8 @@ with tab2:
     - **CSV de Empresas**: Lista de nombres de empresas (una columna)
     - **CSV de IDs Organizaciones**: IDs de organizaciones para búsqueda directa
     
+    **Nota:** La app detecta automáticamente cuando cambias archivos y actualiza los datos.
+    
     ### 4️⃣ Ejecutar Búsqueda
     Haz clic en el botón correspondiente según lo que necesites:
     - **Apollo/Lusha Contactos**: Requiere archivos de cargos, empresas y países
@@ -435,44 +485,19 @@ with tab2:
     
     ---
     
-    ### 🔧 Formato de Archivos CSV
-    
-    **Cargos CSV:**
-    ```
-    cargo
-    CEO
-    CTO
-    Director
-    ```
-    
-    **Empresas CSV:**
-    ```
-    empresa
-    Google
-    Microsoft
-    Amazon
-    ```
-    
-    **IDs Organizaciones CSV:**
-    ```
-    organization_id
-    123456
-    789012
-    345678
-    ```
-    
-    ---
-    
     ### ⚠️ Notas Importantes
     - Los procesos pueden tardar varios minutos dependiendo del volumen de datos
+    - Si ves error 429, la app esperará automáticamente antes de continuar
     - Los archivos se generan y están disponibles para descarga inmediatamente
     - Esta aplicación no almacena tus datos ni API keys permanentemente
+    - **Cambios de archivos**: Detectados automáticamente, no necesitas refrescar la página
     """)
 
 # ===== FOOTER =====
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666;'>
-    <p>Herramienta de Extracción de Datos v4.0 Web | Desarrollado con Streamlit</p>
+    <p>Herramienta de Extracción de Datos v4.1 Web | Desarrollado con Streamlit</p>
+    <p style='font-size: 0.8rem;'>✅ Detección automática de cambios en archivos | ⏱️ Rate limit protection</p>
 </div>
 """, unsafe_allow_html=True)
