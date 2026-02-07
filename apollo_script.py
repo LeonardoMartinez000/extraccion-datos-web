@@ -7,31 +7,33 @@ import time
 
 def limpiar_texto(texto):
     """
-    Limpia el texto eliminando saltos de línea, emojis y caracteres especiales,
-    preservando tildes, eñes y puntuación básica.
+    Limpia el texto eliminando saltos de línea, emojis y caracteres especiales.
     """
     if texto is None or not isinstance(texto, str):
         return texto if texto is not None else ""
     
-    # 1. Reemplazar saltos de línea y tabulaciones por un espacio simple
     texto = texto.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
-    
-    # 2. Mantener solo caracteres ASCII imprimibles y caracteres latinos (tildes/ñ)
-    # Rango \x20-\x7E incluye letras, números y símbolos estándar.
     texto = re.sub(r'[^\x20-\x7EáéíóúÁÉÍÓÚñÑüÜ]', '', texto)
-    
-    # 3. Eliminar espacios múltiples y espacios en los extremos
     texto = ' '.join(texto.split())
     
     return texto.strip()
 
 def run(api_key, empresas, cargos, paises, output_folder, log_callback, stop_event):
     """
-    Ejecuta la extracción de contactos de Apollo con limpieza de datos.
-    Incluye protección contra Error 429 y retry automático.
+    Versión Optimizada: Mayor rendimiento y limpieza de archivos residuales.
     """
-    log_callback("🚀 Iniciando búsqueda de contactos con limpieza de caracteres...")
+    log_callback("🚀 Iniciando Apollo Contactos (Motor Optimizado)...")
     
+    # 1. LIMPIEZA INICIAL: Evita arrastrar datos de ejecuciones anteriores
+    output_file = os.path.join(output_folder, "resultados_apollo.csv")
+    if os.path.exists(output_file):
+        try:
+            os.remove(output_file)
+        except:
+            pass
+
+    resultados = []
+    ids_encontrados = set()
     url = "https://api.apollo.io/api/v1/contacts/search"
     headers = {
         'Cache-Control': 'no-cache',
@@ -40,115 +42,72 @@ def run(api_key, empresas, cargos, paises, output_folder, log_callback, stop_eve
         'x-api-key': api_key
     }
     
-    output_file = os.path.join(output_folder, "resultados_apollo.csv")
-    resultados = []
     campos = [
         "empresa_buscada", "origen", "id", "first_name", "last_name", "name", "linkedin_url", "title", "headline",
         "email_status", "email", "state", "city", "country", "organization_name", "organization_id", "raw_number",
         "sanitized_number", "contact_email"
     ]
 
-    ids_encontrados = set()
-
     def safe_get(dct, *keys):
         for key in keys:
             if isinstance(dct, list):
-                try: 
-                    dct = dct[key]
-                except: 
-                    return None
+                try: dct = dct[key]
+                except: return None
             elif isinstance(dct, dict):
                 dct = dct.get(key)
-            else: 
-                return None
-            if dct is None: 
-                return None
+            else: return None
+            if dct is None: return None
         return dct
 
-    # ===== NUEVO: Validación de datos =====
-    if not cargos:
-        log_callback("❌ ERROR: La lista de cargos está vacía.")
-        return
-    
-    if not empresas:
-        log_callback("❌ ERROR: La lista de empresas está vacía.")
-        return
-    
-    if not paises:
-        log_callback("❌ ERROR: No se seleccionaron países.")
+    # Validación de entradas
+    if not cargos or not empresas or not paises:
+        log_callback("❌ ERROR: Faltan parámetros (cargos, empresas o países).")
         return
 
-    log_callback(f"📊 Datos validados:")
-    log_callback(f"   - Empresas: {len(empresas)}")
-    log_callback(f"   - Cargos: {len(cargos)}")
-    log_callback(f"   - Países: {len(paises)}")
-
-    # Configuración de ubicación (String simple para máxima compatibilidad)
-    ubicacion_query = paises[0] if isinstance(paises, list) and len(paises) == 1 else paises
+    # Lógica de ubicación
+    ubicacion_query = paises[0] if len(paises) == 1 else paises
     
-    # Fragmentación de cargos en lotes de 10
+    # Fragmentación de cargos (Lotes de 10 para evitar Error 422)
     chunk_size = 10 
     chunks_de_cargos = [cargos[i:i + chunk_size] for i in range(0, len(cargos), chunk_size)]
     
-    log_callback(f"ℹ️ Procesando {len(empresas)} empresas con {len(chunks_de_cargos)} bloques de cargos.")
-
-    # ===== NUEVO: Variables para control de rate limiting =====
-    consecutive_429_errors = 0
-    max_429_errors = 3  # Máximo de errores 429 consecutivos antes de pausar más tiempo
-    base_retry_delay = 5  # Segundos base de espera
-    request_delay = 1.5  # Delay entre requests normales (AUMENTADO)
-
+    # Variables de control
+    request_delay = 0.8  # Optimización: Delay reducido para mayor velocidad
+    
     for empresa in empresas:
-        if stop_event.is_set():
-            log_callback("🛑 Proceso cancelado por el usuario.")
-            break
-
-        log_callback(f"\n🔎 Buscando en Apollo: {empresa.strip()}...")
+        if stop_event.is_set(): break
+        empresa_clean = empresa.strip()
+        log_callback(f"\n🔎 Buscando: {empresa_clean}...")
 
         for i, chunk in enumerate(chunks_de_cargos):
-            if stop_event.is_set():
-                log_callback("🛑 Proceso cancelado por el usuario.")
-                break
-            
-            log_callback(f"  -> Lote {i+1}/{len(chunks_de_cargos)} (Cargos: {', '.join(chunk[:3])}{'...' if len(chunk) > 3 else ''})")
+            if stop_event.is_set(): break
             
             payload = {
-                "q_organization_name": empresa.strip(),
+                "q_organization_name": empresa_clean,
                 "organization_locations": ubicacion_query,
                 "person_titles": chunk,
                 "page": 1,
-                "per_page": 50 
+                "per_page": 100 # Optimización: Pedimos 100 de una vez en lugar de 50
             }
             
-            # ===== NUEVO: Retry logic con backoff exponencial =====
-            max_retries = 3
-            retry_count = 0
             success = False
-            
-            while retry_count < max_retries and not success:
+            retries = 0
+            while retries < 3 and not success:
                 try:
-                    response = requests.post(url, headers=headers, json=payload, timeout=30)
+                    response = requests.post(url, headers=headers, json=payload, timeout=25)
                     
                     if response.status_code == 200:
                         data = response.json()
-                        contacts = data.get('contacts', [])  # Usamos 'contacts' según validación Postman
-                        
-                        log_callback(f"    -> ✅ {len(contacts)} contactos encontrados.")
-                        
-                        # ===== NUEVO: Reset contador de errores 429 si la request fue exitosa =====
-                        consecutive_429_errors = 0
+                        contacts = data.get('contacts', [])
                         
                         for person in contacts:
-                            person_id = person.get("id")
-                            
-                            if person_id and person_id not in ids_encontrados:
-                                ids_encontrados.add(person_id)
-                                
-                                # Construcción del registro con limpieza aplicada
+                            p_id = person.get("id")
+                            if p_id and p_id not in ids_encontrados:
+                                ids_encontrados.add(p_id)
                                 resultados.append({
-                                    "empresa_buscada": limpiar_texto(empresa),
-                                    "origen": "contacts_api",
-                                    "id": person_id,
+                                    "empresa_buscada": limpiar_texto(empresa_clean),
+                                    "origen": "apollo_api",
+                                    "id": p_id,
                                     "first_name": limpiar_texto(person.get("first_name")),
                                     "last_name": limpiar_texto(person.get("last_name")),
                                     "name": limpiar_texto(person.get("name")),
@@ -167,77 +126,31 @@ def run(api_key, empresas, cargos, paises, output_folder, log_callback, stop_eve
                                     "contact_email": person.get("contact_email")
                                 })
                         
+                        log_callback(f"  -> Lote {i+1}/{len(chunks_de_cargos)}: ✅ {len(contacts)} encontrados.")
                         success = True
-                        
-                        # ===== NUEVO: Delay normal entre requests =====
                         time.sleep(request_delay)
-                    
-                    # ===== NUEVO: Manejo específico de Error 429 =====
+
                     elif response.status_code == 429:
-                        consecutive_429_errors += 1
-                        retry_count += 1
-                        
-                        # Backoff exponencial: 5s, 10s, 20s
-                        retry_delay = base_retry_delay * (2 ** (retry_count - 1))
-                        
-                        # Si hay muchos errores 429 consecutivos, aumentar el delay
-                        if consecutive_429_errors >= max_429_errors:
-                            retry_delay = 30  # Esperar 30 segundos
-                            log_callback(f"    -> ⚠️ Múltiples errores 429. Esperando {retry_delay}s antes de reintentar...")
-                        else:
-                            log_callback(f"    -> ⚠️ Error 429 (Rate Limit). Intento {retry_count}/{max_retries}. Esperando {retry_delay}s...")
-                        
-                        time.sleep(retry_delay)
-                        
-                        if retry_count >= max_retries:
-                            log_callback(f"    -> ❌ Máximo de reintentos alcanzado. Continuando con siguiente lote...")
-                    
-                    # ===== NUEVO: Manejo de otros errores HTTP =====
-                    elif response.status_code == 422:
-                        log_callback(f"    -> ❌ Error 422: {response.text}")
-                        log_callback(f"    -> Intenta reducir el número de cargos por lote")
-                        break  # No reintentar en error 422
-                        
-                    elif response.status_code == 401:
-                        log_callback(f"    -> ❌ Error 401: API Key inválida o expirada")
-                        return  # Detener todo el proceso
-                    
+                        wait = 10 * (retries + 1)
+                        log_callback(f"  -> ⚠️ Rate limit. Esperando {wait}s...")
+                        time.sleep(wait)
+                        retries += 1
                     else:
-                        log_callback(f"    -> ⚠️ Error {response.status_code} en lote {i+1}")
-                        log_callback(f"    -> Respuesta: {response.text[:200]}")
-                        break  # No reintentar otros errores
-                
-                # ===== NUEVO: Manejo de timeout =====
-                except requests.exceptions.Timeout:
-                    retry_count += 1
-                    log_callback(f"    -> ⏱️ Timeout. Reintentando ({retry_count}/{max_retries})...")
-                    time.sleep(base_retry_delay)
-                
-                # ===== NUEVO: Manejo de otros errores de conexión =====
-                except requests.exceptions.RequestException as e:
-                    log_callback(f"    -> ❌ Error de conexión: {str(e)}")
-                    break  # No reintentar errores de conexión
-                
+                        log_callback(f"  -> ⚠️ Error {response.status_code}. Saltando lote.")
+                        break
                 except Exception as e:
-                    log_callback(f"    -> ❌ Error inesperado: {str(e)}")
+                    log_callback(f"  -> ❌ Error conexión: {str(e)}")
                     break
 
-    # Guardado final en CSV
-    try:
-        if resultados:
+    # Escritura de resultados (Solo si hay datos)
+    if resultados:
+        try:
             with open(output_file, mode="w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.DictWriter(f, fieldnames=campos)
                 writer.writeheader()
                 writer.writerows(resultados)
-            
-            if stop_event.is_set():
-                log_callback(f"\n🚫 Proceso cancelado. {len(resultados)} contactos guardados.")
-            else:
-                log_callback(f"\n✅ Proceso completado exitosamente!")
-                log_callback(f"   📊 Total de contactos únicos: {len(resultados)}")
-                log_callback(f"   📁 Archivo: '{os.path.basename(output_file)}'")
-        else:
-            log_callback("\n⚠️ No se encontraron resultados para los criterios ingresados.")
-    
-    except Exception as e:
-        log_callback(f"\n❌ ERROR al guardar el archivo: {e}")
+            log_callback(f"\n✅ Finalizado. {len(resultados)} registros únicos extraídos.")
+        except Exception as e:
+            log_callback(f"❌ Error al guardar CSV: {e}")
+    else:
+        log_callback("\n⚠️ No se halló información. No se generó archivo nuevo.")
